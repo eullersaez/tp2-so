@@ -268,9 +268,44 @@ void pager_create(pid_t pid) {
     pthread_mutex_unlock(&locker);
 }
 
-// void *pager_extend(pid_t pid){
+void *pager_extend(pid_t pid) {
+    pthread_mutex_lock(&locker);
 
-// }
+    int numeroBloco = 0;
+    while(numeroBloco<tabelaBlocos.numeroBlocos){
+        if(tabelaBlocos.blocos[numeroBloco].pagina == NULL){
+            break;
+        }
+        numeroBloco++;
+    }
+    /* Nesse caso não hã mais blocos disponíveis */
+    if (numeroBloco == tabelaBlocos.numeroBlocos + 1){
+        pthread_mutex_unlock(&locker);
+        return NULL;
+    }
+
+    TabelaPaginas *proc;
+    int i = 0;
+    while (i <= tabelasPagina->count-1)
+    {
+        proc = dlist_get_index(tabelasPagina, i);
+        if(proc->pid == pid){
+            break;
+        } 
+        i++;
+    }
+
+    Pagina *pagina = (Pagina*) malloc(sizeof(Pagina));
+    pagina->vaddr = UVM_BASEADDR + proc->tabelaQuadros.tamanhoPagina * paginas->count;
+    pagina->numeroBloco = numeroBloco;
+    pagina->valida = false;
+    dlist_push_right(proc->paginas, pagina);
+
+    tabelaBlocos.blocos[numeroBloco].pagina = pagina;
+
+    pthread_mutex_unlock(&locker);
+    return (void*)pagina->vaddr;
+}
 
 // void pager_fault(pid_t pid, void *addr){
 
@@ -289,35 +324,13 @@ void pager_create(pid_t pid) {
 
 
 
-void *pager_extend(pid_t pid) {
-    pthread_mutex_lock(&locker);
-    int block_no = get_new_block();
-
-    //there is no blocks available anymore
-    if(block_no == -1) {
-        pthread_mutex_unlock(&locker);
-        return NULL;
-    }
-
-    PageTable *pt = find_page_table(pid); 
-    Page *page = (Page*) malloc(sizeof(Page));
-    page->isvalid = false;
-    page->vaddr = UVM_BASEADDR + pt->pages->count * frame_table.page_size;
-    page->block_number = block_no;
-    dlist_push_right(pt->pages, page);
-
-    block_table.blocks[block_no].page = page;
-
-    pthread_mutex_unlock(&locker);
-    return (void*)page->vaddr;
-}
 
 int second_chance() {
-    FrameNode *frames = frame_table.frames;
+    Quadro *quadros = tabelaQuadros.quadros;
     int frame_to_swap = -1;
 
     while(frame_to_swap == -1) {
-        int index = frame_table.sec_chance_index;
+        int index = tabelaQuadros.indiceSegChance;
         if(frames[index].accessed == 0) {
             frame_to_swap = index;
         } else {
@@ -432,7 +445,6 @@ void pager_destroy(pid_t pid) {
  * external functions
  ***************************************************************************/
 int get_new_frame();
-int get_new_block();
 PageTable* find_page_table(pid_t pid);
 Page* get_page(PageTable *pt, intptr_t vaddr); 
 /////////////////Auxiliar functions ////////////////////////////////
@@ -443,12 +455,6 @@ int get_new_frame() {
     return -1;
 }
 
-int get_new_block() {
-    for(int i = 0; i < block_table.nblocks; i++) {
-        if(block_table.blocks[i].page == NULL) return i;
-    }
-    return -1;
-}
 
 PageTable* find_page_table(pid_t pid) {
     for(int i = 0; i < page_tables->count; i++) {
