@@ -1,15 +1,17 @@
 
 #include <assert.h>
-#include <stdlib.h>
+#include <pthread.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
-#include <stdbool.h>
+#include <stdlib.h>
 #include <sys/mman.h>
-#include <pthread.h>
+#include <unistd.h>
 
 #include "mmu.h"
 #include "pager.h"
+
+
 
 
 void pager_init(int nframes, int nblocks){
@@ -33,5 +35,5 @@ int pager_syslog(pid_t pid, void *addr, size_t len){
 }
 
 void pager_destroy(pid_t pid){
-    
+
 }
