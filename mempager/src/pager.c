@@ -288,7 +288,7 @@ void *pager_extend(pid_t pid) {
     int i = 0;
     while (i <= tabelasPagina->count-1)
     {
-        proc = dlist_get_index(tabelasPagina, i);
+        *proc = dlist_get_index(tabelasPagina, i);
         if(proc->pid == pid){
             break;
         } 
@@ -307,108 +307,139 @@ void *pager_extend(pid_t pid) {
     return (void*)pagina->vaddr;
 }
 
-// void pager_fault(pid_t pid, void *addr){
-
-// }
-
-// int pager_syslog(pid_t pid, void *addr, size_t len){
-
-// }
-
-// void pager_destroy(pid_t pid){
-
-// }
-
-
-
-
-
-
-
-int second_chance() {
-    Quadro *quadros = tabelaQuadros.quadros;
-    int frame_to_swap = -1;
-
-    while(frame_to_swap == -1) {
-        int index = tabelaQuadros.indiceSegChance;
-        if(frames[index].accessed == 0) {
-            frame_to_swap = index;
-        } else {
-            frames[index].accessed = 0;
-        }
-        frame_table.sec_chance_index = (index + 1) % frame_table.nframes;
-    }
-
-    return frame_to_swap;
-}
-
-void swap_out_page(int frame_no) {
-    //gambis: I do not know why I have to set PROT_NONE to all pages
-    //when I am swapping the first one. Must investigate
-    if(frame_no == 0) {
-        for(int i = 0; i < frame_table.nframes; i++) {
-            Page *page = frame_table.frames[i].page;
-            mmu_chprot(frame_table.frames[i].pid, (void*)page->vaddr, PROT_NONE);
-        }
-    }
-
-    FrameNode *frame = &frame_table.frames[frame_no];
-    Page *removed_page = frame->page;
-    removed_page->isvalid = false;
-    mmu_nonresident(frame->pid, (void*)removed_page->vaddr); 
-    
-    if(removed_page->dirty == 1) {
-        block_table.blocks[removed_page->block_number].used = 1;
-        mmu_disk_write(frame_no, removed_page->block_number);
-    }
-}
-
 void pager_fault(pid_t pid, void *vaddr) {
     pthread_mutex_lock(&locker);
-    PageTable *pt = find_page_table(pid); 
+
+    /* Obtem a tabela de pag do processo */
+    TabelaPaginas *proc;
+    int i = 0;
+    while (i <= tabelasPagina->count-1)
+    {
+        *proc = dlist_get_index(tabelasPagina, i);
+        if(proc->pid == pid){
+            break;
+        } 
+        i++; 
+    }
+
     vaddr = (void*)((intptr_t)vaddr - (intptr_t)vaddr % frame_table.page_size);
-    Page *page = get_page(pt, (intptr_t)vaddr); 
 
-    if(page->isvalid == true) {
+    Pagina *pagina;
+    i = 0;
+    while (i<=proc->paginas->count-1)
+    {
+        *pagina = dlist_get_index(proc->paginas, i);
+        if(pagina->(intptr_t)vaddr <= vaddr && (tabelaQuadros.tamanhoPagina + pagina->(intptr_t)vaddr) > vaddr){
+            break
+        }
+        else{
+            *pagina = NULL;
+        }
+        i++
+    }
+
+    if(pagina->valida == true) {
         mmu_chprot(pid, vaddr, PROT_READ | PROT_WRITE);
-        frame_table.frames[page->frame_number].accessed = 1;
-        page->dirty = 1;
+        pagina->modificada = true;
+        tabelaQuadros.quadros[pagina->numeroQuadro].acessado = true;
+
     } else {
-        int frame_no = get_new_frame();
+        /* Pegando novo quadro */
+        int numeroQuadro = -1;
+        i = 0;
+        while(i<=tabelaQuadros.numeroQuadros-1){
+            if (tabelaQuadros.quadros[i].pid == -1){
+                numeroQuadro = i;
+                break
+            }
+            i++;
+        }
   
-        //there is no frames available
-        if(frame_no == -1) {
-            frame_no = second_chance();
-            swap_out_page(frame_no);
+        /* No caso de nao terem mais quadros disponiveis */
+        if(numeroQuadro == -1) {
+            /* Aplica-se o alg da segunda chance */
+            Quadro *quadros = tabelaQuadros.quadros;
+            while(numeroQuadro == -1) {
+                int indice = tabelaQuadros.indiceSegChance;
+                if(quadros[indice].acessado == false) {
+                    numeroQuadro = indice;
+                } else {
+                    quadros[indice].acessado = false;
+                }
+                tabelaQuadros.indiceSegChance = (1 + indice) % tabelaQuadros.numeroQuadros;
+            }
+
+            /* Trocando a pagina */
+            if(numeroQuadro == 0) {
+                i = 0;
+                while(i<=tabelaQuadros.numeroQuadros-1){
+                    Pagina *pagina = tabelaQuadros.quadros[i].pagina;
+                    mmu_chprot(tabelaQuadros.quadros[i].pid, (void*)pagina->vaddr, PROT_NONE);
+                    i++;
+                }
+            }
+
+            Quadro *quadro = &tabelaQuadros.quadros[numeroQuadro];
+            Pagina *paginaRemovida = quadro->pagina;
+            paginaRemovida->valida = false;
+            mmu_nonresident(quadro->pid, (void*)paginaRemovida->vaddr); 
+            
+            if(paginaRemovida->modificada == true) {
+                tabelaBlocos.blocos[paginaRemovida->numeroBloco].utilizado = true;
+                mmu_disk_write(numeroQuadro, paginaRemovida->numeroBloco);
+            }
         }
 
-        FrameNode *frame = &frame_table.frames[frame_no];
-        frame->pid = pid;
-        frame->page = page;
-        frame->accessed = 1;
+        Quadro *quadro = &tabelaQuadros.quadros[numeroQuadro];
+        quadro->acessado = true;
+        quadro->pid = pid;
+        quadro->pagina = pagina;
 
-        page->isvalid = true;
-        page->frame_number = frame_no;
-        page->dirty = 0;
+        pagina->valida = true;
+        pagina->modificada = false;
+        pagina->numeroQuadro = numeroQuadro;
 
-        //this page was already swapped out from main memory
-        if(block_table.blocks[page->block_number].used == 1) {
-            mmu_disk_read(page->block_number, frame_no);
+        /* Pagina ja trocada da memoria */
+        if(tabelaBlocos.blocos[pagina->numeroBloco].utilizado == true) {
+            mmu_disk_read(pagina->numeroBloco, numeroQuadro);
         } else {
-            mmu_zero_fill(frame_no);
+            mmu_zero_fill(numeroQuadro);
         }
-        mmu_resident(pid, vaddr, frame_no, PROT_READ);
+        mmu_resident(pid, vaddr, numeroQuadro, PROT_READ);
     }
     pthread_mutex_unlock(&locker);
 }
 
 int pager_syslog(pid_t pid, void *addr, size_t len) {
     pthread_mutex_lock(&locker);
-    PageTable *pt = find_page_table(pid); 
-    char *buf = (char*) malloc(len + 1);
+
+    /* Busca pela tabela de pag do proc */
+    TabelaPaginas *proc;
+    int i = 0;
+    while (i <= tabelasPagina->count-1){
+        *proc = dlist_get_index(tabelasPagina, i);
+        if(proc->pid == pid){
+            break
+        }
+        i++;
+    }
+
+    char *data = (char*) malloc(1 + len);
 
     for (size_t i = 0, m = 0; i < len; i++) {
-        Page *page = get_page(pt, (intptr_t)addr + i);
+        Pagina *pagina = get_page(proc, (intptr_t)addr + i);
+
+        for(int i=0; i < pt->pages->count; i++) {
+            Page *page = dlist_get_index(pt->pages, i);
+            if(vaddr >= page->vaddr && vaddr < (page->vaddr + frame_table.page_size)) return page;
+        }
+        return NULL;
+
+
+
+
+
+        
 
         //string out of process allocated space
         if(page == NULL) {
@@ -416,18 +447,28 @@ int pager_syslog(pid_t pid, void *addr, size_t len) {
             return -1;
         }
 
-        buf[m++] = pmem[page->frame_number * frame_table.page_size + i];
+        data[m++] = pmem[page->frame_number * frame_table.page_size + i];
     }
-    for(int i = 0; i < len; i++) { // len é o número de bytes a imprimir
-        printf("%02x", (unsigned)buf[i]); // buf contém os dados a serem impressos
+
+    for(int i = 0; i < len; i++) {
+        printf("%02x", (unsigned)data[i]);
     }
-    if(len > 0) printf("\n");
+
+    if(len > 0) {
+        printf("\n")
+    };
+
     pthread_mutex_unlock(&locker);
     return 0;
 }
 
+// void pager_destroy(pid_t pid){
+
+// }
+
 void pager_destroy(pid_t pid) {
     pthread_mutex_lock(&locker);
+
     PageTable *pt = find_page_table(pid); 
 
     while(!dlist_empty(pt->pages)) {
@@ -438,6 +479,7 @@ void pager_destroy(pid_t pid) {
         }
     }
     dlist_destroy(pt->pages, NULL);
+
     pthread_mutex_unlock(&locker);
 }
 
