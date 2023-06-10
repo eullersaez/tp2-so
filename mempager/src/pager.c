@@ -288,7 +288,7 @@ void *pager_extend(pid_t pid) {
     int i = 0;
     while (i <= tabelasPagina->count-1)
     {
-        *proc = dlist_get_index(tabelasPagina, i);
+        proc = dlist_get_index(tabelasPagina, i);
         if(proc->pid == pid){
             break;
         } 
@@ -296,7 +296,7 @@ void *pager_extend(pid_t pid) {
     }
 
     Pagina *pagina = (Pagina*) malloc(sizeof(Pagina));
-    pagina->vaddr = UVM_BASEADDR + proc->tabelaQuadros.tamanhoPagina * paginas->count;
+    pagina->vaddr = UVM_BASEADDR + proc->paginas->count * tabelaQuadros.tamanhoPagina;
     pagina->numeroBloco = numeroBloco;
     pagina->valida = false;
     dlist_push_right(proc->paginas, pagina);
@@ -315,27 +315,28 @@ void pager_fault(pid_t pid, void *vaddr) {
     int i = 0;
     while (i <= tabelasPagina->count-1)
     {
-        *proc = dlist_get_index(tabelasPagina, i);
+        proc = dlist_get_index(tabelasPagina, i);
         if(proc->pid == pid){
             break;
         } 
         i++; 
     }
 
-    vaddr = (void*)((intptr_t)vaddr - (intptr_t)vaddr % frame_table.page_size);
+    vaddr = (void*)((intptr_t)vaddr - (intptr_t)vaddr % tabelaQuadros.tamanhoPagina);
 
+    /* Pegando a pagina correspondente */
     Pagina *pagina;
     i = 0;
     while (i<=proc->paginas->count-1)
     {
-        *pagina = dlist_get_index(proc->paginas, i);
-        if(pagina->(intptr_t)vaddr <= vaddr && (tabelaQuadros.tamanhoPagina + pagina->(intptr_t)vaddr) > vaddr){
-            break
+        pagina = dlist_get_index(proc->paginas, i);
+        if(pagina->vaddr <= (intptr_t)vaddr && (tabelaQuadros.tamanhoPagina + pagina->vaddr) > (intptr_t)vaddr){
+            break;
         }
         else{
-            *pagina = NULL;
+            pagina = NULL;
         }
-        i++
+        i++;
     }
 
     if(pagina->valida == true) {
@@ -350,7 +351,7 @@ void pager_fault(pid_t pid, void *vaddr) {
         while(i<=tabelaQuadros.numeroQuadros-1){
             if (tabelaQuadros.quadros[i].pid == -1){
                 numeroQuadro = i;
-                break
+                break;
             }
             i++;
         }
@@ -417,9 +418,9 @@ int pager_syslog(pid_t pid, void *addr, size_t len) {
     TabelaPaginas *proc;
     int i = 0;
     while (i <= tabelasPagina->count-1){
-        *proc = dlist_get_index(tabelasPagina, i);
+        proc = dlist_get_index(tabelasPagina, i);
         if(proc->pid == pid){
-            break
+            break;
         }
         i++;
     }
@@ -427,27 +428,28 @@ int pager_syslog(pid_t pid, void *addr, size_t len) {
     char *data = (char*) malloc(1 + len);
 
     for (size_t i = 0, m = 0; i < len; i++) {
-        Pagina *pagina = get_page(proc, (intptr_t)addr + i);
-
-        for(int i=0; i < pt->pages->count; i++) {
-            Page *page = dlist_get_index(pt->pages, i);
-            if(vaddr >= page->vaddr && vaddr < (page->vaddr + frame_table.page_size)) return page;
+        /* Pegando a pagina correspondente */
+        Pagina *pagina;
+        int j = 0;
+        while (j<=proc->paginas->count-1)
+        {
+            pagina = dlist_get_index(proc->paginas, j);
+            if(pagina->vaddr <= (intptr_t)addr+i && (tabelaQuadros.tamanhoPagina + pagina->vaddr) > (intptr_t)addr+i){
+                break;
+            }
+            else{
+                pagina = NULL;
+            }
+            j++;
         }
-        return NULL;
 
-
-
-
-
-        
-
-        //string out of process allocated space
-        if(page == NULL) {
+        /* Fora do espaço alocado */
+        if(pagina == NULL) {
             pthread_mutex_unlock(&locker);
             return -1;
         }
 
-        data[m++] = pmem[page->frame_number * frame_table.page_size + i];
+        data[m++] = pmem[tabelaQuadros.tamanhoPagina + i * pagina->numeroQuadro];
     }
 
     for(int i = 0; i < len; i++) {
@@ -455,62 +457,38 @@ int pager_syslog(pid_t pid, void *addr, size_t len) {
     }
 
     if(len > 0) {
-        printf("\n")
+        printf("\n");
     };
 
     pthread_mutex_unlock(&locker);
     return 0;
 }
 
-// void pager_destroy(pid_t pid){
-
-// }
-
 void pager_destroy(pid_t pid) {
     pthread_mutex_lock(&locker);
 
-    PageTable *pt = find_page_table(pid); 
+    /* Encontra a tabela de pag do proc */
+    TabelaPaginas *proc;
+    int i = 0;
+    while (i <= tabelasPagina->count-1)
+    {
+        proc = dlist_get_index(tabelasPagina, i);
+        if(proc->pid == pid){
+            break;
+        }else{
+            proc = NULL;
+        }
+        i++;
+    }
 
-    while(!dlist_empty(pt->pages)) {
-        Page *page = dlist_pop_right(pt->pages);
-        block_table.blocks[page->block_number].page = NULL;
-        if(page->isvalid == true) {
-            frame_table.frames[page->frame_number].pid = -1;
+    while(!dlist_empty(proc->paginas)) {
+        Pagina *pagina = dlist_pop_right(proc->paginas);
+        tabelaBlocos.blocos[pagina->numeroBloco].pagina = NULL;
+        if(pagina->valida == true) {
+            tabelaQuadros.quadros[pagina->numeroQuadro].pid = -1;
         }
     }
-    dlist_destroy(pt->pages, NULL);
+    dlist_destroy(proc->paginas, NULL);
 
     pthread_mutex_unlock(&locker);
-}
-
-/****************************************************************************
- * external functions
- ***************************************************************************/
-int get_new_frame();
-PageTable* find_page_table(pid_t pid);
-Page* get_page(PageTable *pt, intptr_t vaddr); 
-/////////////////Auxiliar functions ////////////////////////////////
-int get_new_frame() {
-    for(int i = 0; i < frame_table.nframes; i++) {
-        if(frame_table.frames[i].pid == -1) return i;
-    }
-    return -1;
-}
-
-
-PageTable* find_page_table(pid_t pid) {
-    for(int i = 0; i < page_tables->count; i++) {
-        PageTable *pt = dlist_get_index(page_tables, i);
-        if(pt->pid == pid) return pt;
-    }
-    printf("error in find_page_table: Pid not found\n");
-    exit(-1);
-}
-
-Page* get_page(PageTable *pt, intptr_t vaddr) {
-    for(int i=0; i < pt->pages->count; i++) {
-        Page *page = dlist_get_index(pt->pages, i);
-        if(vaddr >= page->vaddr && vaddr < (page->vaddr + frame_table.page_size)) return page;
-    }
-    return NULL;
 }
