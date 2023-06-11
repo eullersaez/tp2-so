@@ -34,7 +34,7 @@ void * dlist_get_index(const struct dlist *dl, int idx);
 typedef struct {
     bool valida;
     int num_quadro;
-    int num_bloco;
+    int num_pagina;
     bool sujo; 
     intptr_t virt_end;
     bool usada; 
@@ -118,7 +118,7 @@ void *pager_extend(pid_t proc_id) {
     Pagina *pagina = (Pagina*) malloc(sizeof(Pagina));
     pagina->valida = false;
     pagina->virt_end = UVM_BASEADDR + tp->paginas->count * tabela_quadro.tam_pagina;
-    pagina->num_bloco = num_pagina;
+    pagina->num_pagina = num_pagina;
     dlist_push_right(tp->paginas, pagina);
 
     tabela_bloco.paginas[num_pagina] = *pagina;
@@ -158,8 +158,8 @@ void swap_out_page(int num_quadro) {
     mmu_nonresident(quadro->proc_id, (void*)pagina_removida->virt_end); 
     
     if(pagina_removida->sujo == true) {
-        tabela_bloco.paginas[pagina_removida->num_bloco].usada = true;
-        mmu_disk_write(num_quadro, pagina_removida->num_bloco);
+        tabela_bloco.paginas[pagina_removida->num_pagina].usada = true;
+        mmu_disk_write(num_quadro, pagina_removida->num_pagina);
     }
 }
 
@@ -204,8 +204,8 @@ void pager_fault(pid_t proc_id, void *virt_end) {
         pagina->num_quadro = num_quadro;
         pagina->sujo = false;
 
-        if(tabela_bloco.paginas[pagina->num_bloco].usada == true) {
-            mmu_disk_read(pagina->num_bloco, num_quadro);
+        if(tabela_bloco.paginas[pagina->num_pagina].usada == true) {
+            mmu_disk_read(pagina->num_pagina, num_quadro);
         } else {
             mmu_zero_fill(num_quadro);
         }
