@@ -12,7 +12,6 @@
 
 #include "mmu.h"
 
-/////////////////////////////////list////////////////////////////////////////
 struct dlist {
     struct dnode *head;
     struct dnode *tail;
@@ -30,15 +29,13 @@ void *dlist_pop_right(struct dlist *dl);
 void *dlist_push_right(struct dlist *dl, void *data);
 int dlist_empty(struct dlist *dl);
 
-/* gets the data at index =idx.  =idx can be negative. */
 void * dlist_get_index(const struct dlist *dl, int idx);
-////////////////////////////list end///////////////////////////////////////////////
 
 typedef struct {
     bool valida;
     int num_quadro;
     int num_bloco;
-    bool sujo; //when the page is dirty, it must to be wrote on the disk before swaping it
+    bool sujo; 
     intptr_t virt_end;
 } Pagina;
 
@@ -49,7 +46,7 @@ typedef struct {
 
 typedef struct {
     pid_t proc_id;
-    bool acessada; //to be used by second change algorithm
+    bool acessada;
     Pagina *pagina;
 } Quadro;
 
@@ -61,7 +58,7 @@ typedef struct {
 } TabelaQuadro;
 
 typedef struct {
-    bool usada; //1 if the page was copied to the disk, 0 otherwise
+    bool usada; 
     Pagina *pagina;
 } Bloco;
 
@@ -74,13 +71,7 @@ TabelaQuadro tabela_quadro;
 TabelaBloco tabela_bloco;
 struct dlist *tabelas_pagina;
 
-/****************************************************************************
- * external functions
- ***************************************************************************/
-int get_new_frame();
-int get_new_block();
-TabelaPagina* find_page_table(pid_t proc_id);
-Pagina* get_page(TabelaPagina *tabPag, intptr_t virt_end); 
+TabelaPagina* get_tp(pid_t proc_id);
 pthread_mutex_t locker;
 
 void pager_init(int num_quadros, int num_blocos) {
@@ -115,15 +106,19 @@ void pager_create(pid_t proc_id) {
 
 void *pager_extend(pid_t proc_id) {
     pthread_mutex_lock(&locker);
-    int num_bloco = get_new_block();
+    int num_bloco = 0;
 
-    //there is no blocks available anymore
-    if(num_bloco == -1) {
+    while(num_bloco < tabela_bloco.num_blocos) {
+        if(tabela_bloco.blocos[num_bloco].pagina == NULL) break;
+        num_bloco++;
+    }
+
+    if(num_bloco == tabela_bloco.num_blocos) {
         pthread_mutex_unlock(&locker);
         return NULL;
     }
 
-    TabelaPagina *tp = find_page_table(proc_id); 
+    TabelaPagina *tp = get_tp(proc_id); 
     Pagina *pagina = (Pagina*) malloc(sizeof(Pagina));
     pagina->valida = false;
     pagina->virt_end = UVM_BASEADDR + tp->paginas->count * tabela_quadro.tam_pagina;
@@ -154,8 +149,6 @@ int second_chance() {
 }
 
 void swap_out_page(int num_quadro) {
-    //gambis: I do not know why I have to set PROT_NONE to all pages
-    //when I am swapping the first one. Must investigate
     if(num_quadro == 0) {
         for(int i = 0; i < tabela_quadro.num_quadros; i++) {
             Pagina *pagina = tabela_quadro.quadros[i].pagina;
@@ -176,19 +169,32 @@ void swap_out_page(int num_quadro) {
 
 void pager_fault(pid_t proc_id, void *virt_end) {
     pthread_mutex_lock(&locker);
-    TabelaPagina *tp = find_page_table(proc_id); 
+    TabelaPagina *tp = get_tp(proc_id); 
     virt_end = (void*)((intptr_t)virt_end - (intptr_t)virt_end % tabela_quadro.tam_pagina);
-    Pagina *pagina = get_page(tp, (intptr_t)virt_end); 
+    Pagina *pagina = NULL; 
 
+    for(int i=0; i < tp->paginas->count; i++) {
+        intptr_t aux_end = (intptr_t)virt_end;
+        Pagina *aux = dlist_get_index(tp->paginas, i);
+        if(aux_end >= aux->virt_end && aux_end < (aux->virt_end + tabela_quadro.tam_pagina)) {
+            pagina = aux;
+            break;
+        }
+    }
+    
     if(pagina->valida == true) {
         mmu_chprot(proc_id, virt_end, PROT_READ | PROT_WRITE);
         tabela_quadro.quadros[pagina->num_quadro].acessada = true;
         pagina->sujo = true;
     } else {
-        int num_quadro = get_new_frame();
+        int num_quadro = 0;
 
-        //there is no frames available
-        if(num_quadro == -1) {
+        while(num_quadro < tabela_quadro.num_quadros) {
+            if(tabela_quadro.quadros[num_quadro].proc_id == -1) break;
+            num_quadro++;
+        }
+
+        if(num_quadro == tabela_quadro.num_quadros) {
             num_quadro = second_chance();
             swap_out_page(num_quadro);
         }
@@ -202,7 +208,6 @@ void pager_fault(pid_t proc_id, void *virt_end) {
         pagina->num_quadro = num_quadro;
         pagina->sujo = false;
 
-        //this page was already swapped out from main memory
         if(tabela_bloco.blocos[pagina->num_bloco].usada == true) {
             mmu_disk_read(pagina->num_bloco, num_quadro);
         } else {
@@ -215,13 +220,20 @@ void pager_fault(pid_t proc_id, void *virt_end) {
 
 int pager_syslog(pid_t proc_id, void *endereco, size_t tamanho) {
     pthread_mutex_lock(&locker);
-    TabelaPagina *tp = find_page_table(proc_id); 
+    TabelaPagina *tp = get_tp(proc_id); 
     char *buf = (char*) malloc(tamanho + 1);
 
     for (size_t i = 0, m = 0; i < tamanho; i++) {
-        Pagina *pagina = get_page(tp, (intptr_t)endereco + i);
+        Pagina *pagina = NULL;
 
-        //string out of process allocated space
+        for(int i=0; i < tp->paginas->count; i++) {
+            intptr_t aux_end = (intptr_t)endereco;
+            Pagina *aux = dlist_get_index(tp->paginas, i);
+            if(aux_end >= aux->virt_end && aux_end < (aux->virt_end + tabela_quadro.tam_pagina)) {
+                pagina = aux;
+                break;
+            }
+        }
         if(pagina == NULL) {
             pthread_mutex_unlock(&locker);
             return -1;
@@ -229,8 +241,8 @@ int pager_syslog(pid_t proc_id, void *endereco, size_t tamanho) {
 
         buf[m++] = pmem[pagina->num_quadro * tabela_quadro.tam_pagina + i];
     }
-    for(int i = 0; i < tamanho; i++) { // len é o número de bytes a imprimir
-        printf("%02x", (unsigned)buf[i]); // buf contém os dados a serem impressos
+    for(int i = 0; i < tamanho; i++) { 
+        printf("%02x", (unsigned)buf[i]); 
     }
     if(tamanho > 0) printf("\n");
     pthread_mutex_unlock(&locker);
@@ -239,7 +251,7 @@ int pager_syslog(pid_t proc_id, void *endereco, size_t tamanho) {
 
 void pager_destroy(pid_t proc_id) {
     pthread_mutex_lock(&locker);
-    TabelaPagina *tp = find_page_table(proc_id); 
+    TabelaPagina *tp = get_tp(proc_id); 
 
     while(!dlist_empty(tp->paginas)) {
         Pagina *pagina = dlist_pop_right(tp->paginas);
@@ -252,39 +264,14 @@ void pager_destroy(pid_t proc_id) {
     pthread_mutex_unlock(&locker);
 }
 
-/////////////////Auxiliar functions ////////////////////////////////
-int get_new_frame() {
-    for(int i = 0; i < tabela_quadro.num_quadros; i++) {
-        if(tabela_quadro.quadros[i].proc_id == -1) return i;
-    }
-    return -1;
-}
-
-int get_new_block() {
-    for(int i = 0; i < tabela_bloco.num_blocos; i++) {
-        if(tabela_bloco.blocos[i].pagina == NULL) return i;
-    }
-    return -1;
-}
-
-TabelaPagina* find_page_table(pid_t proc_id) {
+TabelaPagina* get_tp(pid_t proc_id) {
     for(int i = 0; i < tabelas_pagina->count; i++) {
         TabelaPagina *tp = dlist_get_index(tabelas_pagina, i);
         if(tp->proc_id == proc_id) return tp;
     }
-    printf("error in find_page_table: Pid not found\n");
     exit(-1);
 }
 
-Pagina* get_page(TabelaPagina *tp, intptr_t virt_end) {
-    for(int i=0; i < tp->paginas->count; i++) {
-        Pagina *pagina = dlist_get_index(tp->paginas, i);
-        if(virt_end >= pagina->virt_end && virt_end < (pagina->virt_end + tabela_quadro.tam_pagina)) return pagina;
-    }
-    return NULL;
-}
-
-/////////////////////// List functions //////////////////////////////
 struct dlist *dlist_create(void) {
     struct dlist *dl = malloc(sizeof(struct dlist));
     assert(dl);
