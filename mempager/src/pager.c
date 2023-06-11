@@ -38,7 +38,7 @@ typedef struct {
     bool valida;
     int num_quadro;
     int num_bloco;
-    int sujo; //when the page is dirty, it must to be wrote on the disk before swaping it
+    bool sujo; //when the page is dirty, it must to be wrote on the disk before swaping it
     intptr_t virt_end;
 } Pagina;
 
@@ -49,7 +49,7 @@ typedef struct {
 
 typedef struct {
     pid_t proc_id;
-    int acessada; //to be used by second change algorithm
+    bool acessada; //to be used by second change algorithm
     Pagina *pagina;
 } Quadro;
 
@@ -61,7 +61,7 @@ typedef struct {
 } TabelaQuadro;
 
 typedef struct {
-    int usada; //1 if the page was copied to the disk, 0 otherwise
+    bool usada; //1 if the page was copied to the disk, 0 otherwise
     Pagina *pagina;
 } Bloco;
 
@@ -97,7 +97,7 @@ void pager_init(int num_quadros, int num_blocos) {
     tabela_bloco.num_blocos = num_blocos;
     tabela_bloco.blocos = malloc(num_blocos * sizeof(Bloco));
     for(int i = 0; i < num_blocos; i++) {
-        tabela_bloco.blocos[i].usada = 0;
+        tabela_bloco.blocos[i].usada = false;
     }
     tabelas_pagina = dlist_create();
     pthread_mutex_unlock(&locker);
@@ -142,10 +142,10 @@ int second_chance() {
 
     while(quadro_trocar == -1) {
         int index = tabela_quadro.index_retent;
-        if(quadros[index].acessada == 0) {
+        if(quadros[index].acessada == false) {
             quadro_trocar = index;
         } else {
-            quadros[index].acessada = 0;
+            quadros[index].acessada = false;
         }
         tabela_quadro.index_retent = (index + 1) % tabela_quadro.num_quadros;
     }
@@ -168,8 +168,8 @@ void swap_out_page(int num_quadro) {
     pagina_removida->valida = false;
     mmu_nonresident(quadro->proc_id, (void*)pagina_removida->virt_end); 
     
-    if(pagina_removida->sujo == 1) {
-        tabela_bloco.blocos[pagina_removida->num_bloco].usada = 1;
+    if(pagina_removida->sujo == true) {
+        tabela_bloco.blocos[pagina_removida->num_bloco].usada = true;
         mmu_disk_write(num_quadro, pagina_removida->num_bloco);
     }
 }
@@ -182,8 +182,8 @@ void pager_fault(pid_t proc_id, void *virt_end) {
 
     if(pagina->valida == true) {
         mmu_chprot(proc_id, virt_end, PROT_READ | PROT_WRITE);
-        tabela_quadro.quadros[pagina->num_quadro].acessada = 1;
-        pagina->sujo = 1;
+        tabela_quadro.quadros[pagina->num_quadro].acessada = true;
+        pagina->sujo = true;
     } else {
         int num_quadro = get_new_frame();
 
@@ -196,14 +196,14 @@ void pager_fault(pid_t proc_id, void *virt_end) {
         Quadro *quadro = &tabela_quadro.quadros[num_quadro];
         quadro->proc_id = proc_id;
         quadro->pagina = pagina;
-        quadro->acessada = 1;
+        quadro->acessada = true;
 
         pagina->valida = true;
         pagina->num_quadro = num_quadro;
-        pagina->sujo = 0;
+        pagina->sujo = false;
 
         //this page was already swapped out from main memory
-        if(tabela_bloco.blocos[pagina->num_bloco].usada == 1) {
+        if(tabela_bloco.blocos[pagina->num_bloco].usada == true) {
             mmu_disk_read(pagina->num_bloco, num_quadro);
         } else {
             mmu_zero_fill(num_quadro);
