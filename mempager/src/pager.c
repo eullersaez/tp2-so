@@ -1,16 +1,14 @@
-#include "pager.h"
-
-#include <sys/mman.h>
-
 #include <assert.h>
 #include <pthread.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
 #include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include "mmu.h"
+#include "pager.h"
 
 struct dlist {
     struct dnode *head;
