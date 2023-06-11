@@ -37,6 +37,7 @@ typedef struct {
     int num_bloco;
     bool sujo; 
     intptr_t virt_end;
+    bool usada; 
 } Pagina;
 
 typedef struct {
@@ -58,13 +59,8 @@ typedef struct {
 } TabelaQuadro;
 
 typedef struct {
-    bool usada; 
-    Pagina *pagina;
-} Bloco;
-
-typedef struct {
-    int num_blocos;
-    Bloco *blocos;
+    int num_paginas;
+    Pagina *paginas;
 } TabelaBloco;
 
 TabelaQuadro tabela_quadro;
@@ -74,7 +70,7 @@ struct dlist *tabelas_pagina;
 TabelaPagina* get_tp(pid_t proc_id);
 pthread_mutex_t locker;
 
-void pager_init(int num_quadros, int num_blocos) {
+void pager_init(int num_quadros, int num_paginas) {
     pthread_mutex_lock(&locker);
     tabela_quadro.num_quadros = num_quadros;
     tabela_quadro.tam_pagina = sysconf(_SC_PAGESIZE);
@@ -85,10 +81,10 @@ void pager_init(int num_quadros, int num_blocos) {
         tabela_quadro.quadros[i].proc_id = -1;
     }
 
-    tabela_bloco.num_blocos = num_blocos;
-    tabela_bloco.blocos = malloc(num_blocos * sizeof(Bloco));
-    for(int i = 0; i < num_blocos; i++) {
-        tabela_bloco.blocos[i].usada = false;
+    tabela_bloco.num_paginas = num_paginas;
+    tabela_bloco.paginas = malloc(num_paginas * sizeof(Pagina));
+    for(int i = 0; i < num_paginas; i++) {
+        tabela_bloco.paginas[i].usada = false;
     }
     tabelas_pagina = dlist_create();
     pthread_mutex_unlock(&locker);
@@ -106,14 +102,14 @@ void pager_create(pid_t proc_id) {
 
 void *pager_extend(pid_t proc_id) {
     pthread_mutex_lock(&locker);
-    int num_bloco = 0;
+    int num_pagina = 0;
 
-    while(num_bloco < tabela_bloco.num_blocos) {
-        if(tabela_bloco.blocos[num_bloco].pagina == NULL) break;
-        num_bloco++;
+    while(num_pagina < tabela_bloco.num_paginas) {
+        if(!tabela_bloco.paginas[num_pagina].virt_end) break;
+        num_pagina++;
     }
 
-    if(num_bloco == tabela_bloco.num_blocos) {
+    if(num_pagina == tabela_bloco.num_paginas) {
         pthread_mutex_unlock(&locker);
         return NULL;
     }
@@ -122,10 +118,10 @@ void *pager_extend(pid_t proc_id) {
     Pagina *pagina = (Pagina*) malloc(sizeof(Pagina));
     pagina->valida = false;
     pagina->virt_end = UVM_BASEADDR + tp->paginas->count * tabela_quadro.tam_pagina;
-    pagina->num_bloco = num_bloco;
+    pagina->num_bloco = num_pagina;
     dlist_push_right(tp->paginas, pagina);
 
-    tabela_bloco.blocos[num_bloco].pagina = pagina;
+    tabela_bloco.paginas[num_pagina] = *pagina;
 
     pthread_mutex_unlock(&locker);
     return (void*)pagina->virt_end;
@@ -162,7 +158,7 @@ void swap_out_page(int num_quadro) {
     mmu_nonresident(quadro->proc_id, (void*)pagina_removida->virt_end); 
     
     if(pagina_removida->sujo == true) {
-        tabela_bloco.blocos[pagina_removida->num_bloco].usada = true;
+        tabela_bloco.paginas[pagina_removida->num_bloco].usada = true;
         mmu_disk_write(num_quadro, pagina_removida->num_bloco);
     }
 }
@@ -208,7 +204,7 @@ void pager_fault(pid_t proc_id, void *virt_end) {
         pagina->num_quadro = num_quadro;
         pagina->sujo = false;
 
-        if(tabela_bloco.blocos[pagina->num_bloco].usada == true) {
+        if(tabela_bloco.paginas[pagina->num_bloco].usada == true) {
             mmu_disk_read(pagina->num_bloco, num_quadro);
         } else {
             mmu_zero_fill(num_quadro);
@@ -255,7 +251,6 @@ void pager_destroy(pid_t proc_id) {
 
     while(!dlist_empty(tp->paginas)) {
         Pagina *pagina = dlist_pop_right(tp->paginas);
-        tabela_bloco.blocos[pagina->num_bloco].pagina = NULL;
         if(pagina->valida == true) {
             tabela_quadro.quadros[pagina->num_quadro].proc_id = -1;
         }
